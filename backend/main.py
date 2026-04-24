@@ -7,9 +7,11 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from datetime import datetime
+from twilio.jwt.access_token import AccessToken
+from twilio.jwt.access_token.grants import VoiceGrant
 import json
 
-from config import BASE_URL
+from config import BASE_URL, TWILIO_ACCOUNT_SID, TWILIO_API_KEY, TWILIO_API_SECRET, TWIML_APP_SID
 from database import init_db, get_db
 from models import CallSession, Order, TranscriptEntry
 from websocket_manager import ws_manager
@@ -44,6 +46,20 @@ async def startup():
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "VoxBridge", "version": "1.0.0"}
+@app.get("/api/token")
+async def get_access_token():
+    token = AccessToken(
+        TWILIO_ACCOUNT_SID,
+        TWILIO_API_KEY,
+        TWILIO_API_SECRET,
+        identity="demo-browser-caller",
+        ttl=3600
+    )
+    token.add_grant(VoiceGrant(
+        outgoing_application_sid=TWIML_APP_SID,
+        incoming_allow=True
+    ))
+    return {"token": token.to_jwt()}
 
 
 @app.post("/voice/inbound")

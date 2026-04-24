@@ -1,9 +1,15 @@
+# env
+.env
+backend/.env
+
+# python
 __pycache__/
 *.pyc
-.env
-venv/
-node_modules/
-dist/
+backend/venv/
 *.db
-*.sqlite
+
+# node
+frontend/node_modules/
+
+# misc
 .DS_Store

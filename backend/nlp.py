@@ -1,9 +1,10 @@
-import anthropic
+from google import genai
+from google.genai import types
 import json
 import re
-from config import ANTHROPIC_API_KEY
+from config import GEMINI_API_KEY
 
-client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 SYSTEM_PROMPT = """You are VoxBridge, a warm and efficient voice order assistant for Automaton AI Infosystem.
 
@@ -25,8 +26,8 @@ Language greetings reference:
 Do not say "ORDER_CONFIRMED" until you have ALL THREE fields: item, quantity, and address."""
 
 
+
 def extract_order_from_reply(reply: str) -> dict | None:
-    """Parse ORDER_CONFIRMED JSON from bot reply if present."""
     match = re.search(r"ORDER_CONFIRMED:\s*(\{.*?\})", reply, re.DOTALL)
     if match:
         try:
@@ -37,7 +38,6 @@ def extract_order_from_reply(reply: str) -> dict | None:
 
 
 def clean_reply_for_tts(reply: str) -> str:
-    """Remove the ORDER_CONFIRMED JSON tag from spoken text."""
     return re.sub(r"ORDER_CONFIRMED:.*", "", reply).strip()
 
 
@@ -47,31 +47,33 @@ def get_bot_reply(
     conversation_history: list,
     sentinel_mode: bool = False,
 ) -> dict:
-    """
-    Get Claude's response given conversation history.
-    Returns reply text, cleaned TTS version, and order data if confirmed.
-    """
     extra_hint = ""
     if sentinel_mode:
         extra_hint = "\n[SENTINEL: Customer seems confused. Use very simple, slow, short sentences.]"
 
-    history = conversation_history.copy()
-    history.append(
-        {
-            "role": "user",
-            "content": f"[Customer spoke in {language_name}]: {customer_text}{extra_hint}",
-        }
+    # Build conversation for Gemini
+    contents = []
+    for msg in conversation_history:
+        role = "user" if msg["role"] == "user" else "model"
+        contents.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
+
+    # Add current message
+    contents.append(types.Content(
+        role="user",
+        parts=[types.Part(text=f"[Customer spoke in {language_name}]: {customer_text}{extra_hint}")]
+    ))
+
+    response = client.models.generate_content(
+        model="gemini-1.5-flash",
+        config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT, max_output_tokens=250),
+        contents=contents
     )
 
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=250,
-        system=SYSTEM_PROMPT,
-        messages=history,
-    )
+    reply = response.text.strip()
 
-    reply = response.content[0].text.strip()
-    history.append({"role": "assistant", "content": reply})
+    updated_history = conversation_history.copy()
+    updated_history.append({"role": "user", "content": f"[Customer spoke in {language_name}]: {customer_text}{extra_hint}"})
+    updated_history.append({"role": "assistant", "content": reply})
 
     order_data = extract_order_from_reply(reply)
     tts_text = clean_reply_for_tts(reply)
@@ -81,5 +83,5 @@ def get_bot_reply(
         "tts_text": tts_text,
         "order_confirmed": order_data is not None,
         "order_data": order_data,
-        "updated_history": history,
+        "updated_history": updated_history,
     }

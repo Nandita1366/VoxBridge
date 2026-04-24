@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VoxBridge — Browser Phone</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://sdk.twilio.com/js/client/releases/2.10.0/twilio.js"></script>
+  <style>
+    :root {
+      --navy:    #0A0F1E;
+      --surface: #0F1629;
+      --card:    #141C35;
+      --border:  #1E2A4A;
+      --teal:    #00D9B8;
+      --teal-dim:#00A38B;
+      --amber:   #F59E0B;
+      --red:     #EF4444;
+      --green:   #10B981;
+      --muted:   #4B5A7A;
+      --text:    #E2E8F0;
+      --subtext: #94A3B8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--navy);
+      color: var(--text);
+      font-family: 'Syne', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    body::before {
+      content: '';
+      position: fixed; inset: 0;
+      background: repeating-linear-gradient(0deg, transparent, transparent 2px,
+        rgba(0,217,184,0.012) 2px, rgba(0,217,184,0.012) 4px);
+      pointer-events: none; z-index: 9999;
+    }
+
+    .phone {
+      width: 320px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      overflow: hidden;
+      box-shadow: 0 0 60px rgba(0,217,184,0.06), 0 24px 80px rgba(0,0,0,0.6);
+    }
+
+    /* Status bar */
+    .status-bar {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .brand { font-size: 13px; font-weight: 700; letter-spacing: -0.01em; color: var(--teal); }
+    .brand span { color: var(--subtext); font-weight: 400; }
+    .status-indicator {
+      display: flex; align-items: center; gap: 6px;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--muted); transition: background 0.3s;
+    }
+    .dot.ready    { background: var(--green); animation: pulse 2s infinite; }
+    .dot.calling  { background: var(--amber); animation: pulse 0.8s infinite; }
+    .dot.active   { background: var(--teal);  animation: pulse 1.5s infinite; }
+    .dot.error    { background: var(--red); }
+    @keyframes pulse {
+      0%,100% { opacity:1; transform:scale(1); }
+      50%     { opacity:0.4; transform:scale(0.75); }
+    }
+
+    /* Display */
+    .display {
+      padding: 28px 24px 20px;
+      text-align: center;
+      min-height: 120px;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 8px;
+    }
+    .display-number {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 22px; font-weight: 500;
+      color: var(--text); letter-spacing: 0.04em;
+      min-height: 30px;
+    }
+    .display-label {
+      font-size: 11px; color: var(--subtext);
+      font-family: 'IBM Plex Mono', monospace;
+      text-transform: uppercase; letter-spacing: 0.08em;
+    }
+    .timer {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 13px; color: var(--teal);
+      display: none;
+    }
+    .timer.visible { display: block; }
+
+    /* Keypad */
+    .keypad {
+      padding: 8px 20px 20px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+    }
+    .key {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 8px 12px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.12s;
+      user-select: none;
+    }
+    .key:hover { border-color: var(--teal-dim); background: rgba(0,217,184,0.05); }
+    .key:active { transform: scale(0.93); background: rgba(0,217,184,0.1); }
+    .key-digit {
+      font-size: 20px; font-weight: 600; color: var(--text); line-height: 1;
+    }
+    .key-alpha {
+      font-size: 9px; color: var(--muted); letter-spacing: 0.1em;
+      font-family: 'IBM Plex Mono', monospace; margin-top: 3px;
+      text-transform: uppercase;
+    }
+
+    /* Action buttons */
+    .actions {
+      padding: 0 20px 28px;
+      display: flex; align-items: center; justify-content: center; gap: 16px;
+    }
+    .btn-call {
+      width: 68px; height: 68px; border-radius: 50%;
+      background: var(--teal);
+      border: none; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 26px;
+      box-shadow: 0 0 24px rgba(0,217,184,0.35);
+      transition: all 0.15s;
+    }
+    .btn-call:hover { transform: scale(1.06); box-shadow: 0 0 36px rgba(0,217,184,0.5); }
+    .btn-call:active { transform: scale(0.95); }
+    .btn-call.btn-end {
+      background: var(--red);
+      box-shadow: 0 0 24px rgba(239,68,68,0.35);
+    }
+    .btn-call.btn-end:hover { box-shadow: 0 0 36px rgba(239,68,68,0.5); }
+    .btn-call:disabled { opacity: 0.35; cursor: not-allowed; transform: none !important; }
+
+    .btn-mute {
+      width: 48px; height: 48px; border-radius: 50%;
+      background: transparent; border: 1px solid var(--border);
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      font-size: 18px; transition: all 0.15s; color: var(--subtext);
+    }
+    .btn-mute:hover { border-color: var(--amber); color: var(--amber); }
+    .btn-mute.muted { border-color: var(--amber); background: rgba(245,158,11,0.1); color: var(--amber); }
+    .btn-mute:disabled { opacity: 0.3; cursor: not-allowed; }
+
+    /* Log */
+    .log {
+      border-top: 1px solid var(--border);
+      padding: 12px 20px;
+      max-height: 110px; overflow-y: auto;
+      background: rgba(10,15,30,0.5);
+    }
+    .log-entry {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 10px; line-height: 1.6;
+      padding: 1px 0;
+    }
+    .log-entry.info    { color: var(--subtext); }
+    .log-entry.success { color: var(--teal); }
+    .log-entry.warn    { color: var(--amber); }
+    .log-entry.error   { color: var(--red); }
+
+    ::-webkit-scrollbar { width: 3px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    /* Number input area */
+    .input-row {
+      padding: 0 20px 8px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .number-input {
+      flex: 1;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; padding: 9px 12px;
+      color: var(--text); font-family: 'IBM Plex Mono', monospace; font-size: 13px;
+      outline: none; transition: border-color 0.2s;
+    }
+    .number-input:focus { border-color: var(--teal-dim); }
+    .number-input::placeholder { color: var(--muted); }
+    .btn-clear {
+      background: transparent; border: 1px solid var(--border);
+      border-radius: 8px; padding: 9px 10px;
+      color: var(--subtext); cursor: pointer; font-size: 13px;
+      transition: all 0.15s;
+    }
+    .btn-clear:hover { border-color: var(--red); color: var(--red); }
+  </style>
+</head>
+<body>
+
+<div class="phone">
+  <!-- Status bar -->
+  <div class="status-bar">
+    <div class="brand">VoxBridge <span>Phone</span></div>
+    <div class="status-indicator">
+      <div class="dot" id="dot"></div>
+      <span id="status-text" style="color:var(--subtext)">Loading…</span>
+    </div>
+  </div>
+
+  <!-- Display -->
+  <div class="display">
+    <div class="display-number" id="display">+91</div>
+    <div class="display-label" id="display-label">Enter number to call</div>
+    <div class="timer" id="timer">00:00</div>
+  </div>
+
+  <!-- Number input (type/paste number) -->
+  <div class="input-row">
+    <input class="number-input" id="number-input"
+      type="tel" placeholder="+91XXXXXXXXXX"
+      oninput="syncDisplay(this.value)" />
+    <button class="btn-clear" onclick="clearNumber()">⌫</button>
+  </div>
+
+  <!-- Keypad -->
+  <div class="keypad">
+    <div class="key" onclick="pressKey('1')"><div class="key-digit">1</div><div class="key-alpha"> </div></div>
+    <div class="key" onclick="pressKey('2')"><div class="key-digit">2</div><div class="key-alpha">ABC</div></div>
+    <div class="key" onclick="pressKey('3')"><div class="key-digit">3</div><div class="key-alpha">DEF</div></div>
+    <div class="key" onclick="pressKey('4')"><div class="key-digit">4</div><div class="key-alpha">GHI</div></div>
+    <div class="key" onclick="pressKey('5')"><div class="key-digit">5</div><div class="key-alpha">JKL</div></div>
+    <div class="key" onclick="pressKey('6')"><div class="key-digit">6</div><div class="key-alpha">MNO</div></div>
+    <div class="key" onclick="pressKey('7')"><div class="key-digit">7</div><div class="key-alpha">PQRS</div></div>
+    <div class="key" onclick="pressKey('8')"><div class="key-digit">8</div><div class="key-alpha">TUV</div></div>
+    <div class="key" onclick="pressKey('9')"><div class="key-digit">9</div><div class="key-alpha">WXYZ</div></div>
+    <div class="key" onclick="pressKey('*')"><div class="key-digit">*</div><div class="key-alpha"> </div></div>
+    <div class="key" onclick="pressKey('0')"><div class="key-digit">0</div><div class="key-alpha">+</div></div>
+    <div class="key" onclick="pressKey('#')"><div class="key-digit">#</div><div class="key-alpha"> </div></div>
+  </div>
+
+  <!-- Call / End / Mute buttons -->
+  <div class="actions">
+    <button class="btn-mute" id="btn-mute" disabled onclick="toggleMute()" title="Mute">🎙</button>
+    <button class="btn-call" id="btn-call" disabled onclick="handleCall()">📞</button>
+    <div style="width:48px"></div>
+  </div>
+
+  <!-- Log -->
+  <div class="log" id="log">
+    <div class="log-entry info">Connecting to VoxBridge…</div>
+  </div>
+</div>
+
+<script>
+  // ── Config ──────────────────────────────────────────────────────────────
+  const API = 'http://localhost:8000'  // change if your backend runs elsewhere
+
+  // ── State ───────────────────────────────────────────────────────────────
+  let device = null
+  let activeConnection = null
+  let isMuted = false
+  let callTimer = null
+  let callSeconds = 0
+
+  // ── DOM refs ─────────────────────────────────────────────────────────────
+  const dot          = document.getElementById('dot')
+  const statusText   = document.getElementById('status-text')
+  const display      = document.getElementById('display')
+  const displayLabel = document.getElementById('display-label')
+  const timerEl      = document.getElementById('timer')
+  const btnCall      = document.getElementById('btn-call')
+  const btnMute      = document.getElementById('btn-mute')
+  const numberInput  = document.getElementById('number-input')
+  const logEl        = document.getElementById('log')
+
+  // ── Logger ───────────────────────────────────────────────────────────────
+  function log(msg, type='info') {
+    const ts  = new Date().toTimeString().slice(0,8)
+    const div = document.createElement('div')
+    div.className = `log-entry ${type}`
+    div.textContent = `[${ts}] ${msg}`
+    logEl.appendChild(div)
+    logEl.scrollTop = logEl.scrollHeight
+  }
+
+  // ── Status helpers ───────────────────────────────────────────────────────
+  function setStatus(label, dotClass, color='var(--subtext)') {
+    dot.className = `dot ${dotClass}`
+    statusText.textContent = label
+    statusText.style.color = color
+  }
+
+  // ── Timer ─────────────────────────────────────────────────────────────────
+  function startTimer() {
+    callSeconds = 0
+    timerEl.classList.add('visible')
+    callTimer = setInterval(() => {
+      callSeconds++
+      const m = String(Math.floor(callSeconds/60)).padStart(2,'0')
+      const s = String(callSeconds%60).padStart(2,'0')
+      timerEl.textContent = `${m}:${s}`
+    }, 1000)
+  }
+  function stopTimer() {
+    clearInterval(callTimer)
+    timerEl.classList.remove('visible')
+  }
+
+  // ── Keypad ────────────────────────────────────────────────────────────────
+  function pressKey(k) {
+    if (activeConnection) {
+      activeConnection.sendDigits(k)
+      log(`Sent DTMF: ${k}`, 'info')
+      return
+    }
+    const v = numberInput.value || ''
+    numberInput.value = v + k
+    syncDisplay(numberInput.value)
+  }
+  function syncDisplay(val) {
+    display.textContent = val || '+91'
+  }
+  function clearNumber() {
+    if (activeConnection) return
+    numberInput.value = numberInput.value.slice(0,-1)
+    syncDisplay(numberInput.value)
+  }
+
+  // ── Mute ──────────────────────────────────────────────────────────────────
+  function toggleMute() {
+    if (!activeConnection) return
+    isMuted = !isMuted
+    activeConnection.mute(isMuted)
+    btnMute.classList.toggle('muted', isMuted)
+    btnMute.textContent = isMuted ? '🔇' : '🎙'
+    log(isMuted ? 'Muted' : 'Unmuted', 'warn')
+  }
+
+  // ── Call handling ─────────────────────────────────────────────────────────
+  function handleCall() {
+    if (activeConnection) {
+      endCall()
+    } else {
+      startCall()
+    }
+  }
+
+  function startCall() {
+    const to = numberInput.value.trim()
+    if (!to) {
+      log('Enter a phone number first', 'warn')
+      return
+    }
+    if (!device) { log('Device not ready', 'error'); return }
+
+    log(`Calling ${to}…`, 'success')
+    setStatus('Calling…', 'calling', 'var(--amber)')
+    displayLabel.textContent = 'Connecting…'
+
+    activeConnection = device.connect({ To: to })
+
+    activeConnection.on('accept', () => {
+      log('Call connected ✓', 'success')
+      setStatus('Live', 'active', 'var(--teal)')
+      displayLabel.textContent = 'Call in progress'
+      btnCall.classList.add('btn-end')
+      btnCall.innerHTML = '📵'
+      btnMute.disabled = false
+      startTimer()
+    })
+
+    activeConnection.on('disconnect', () => {
+      log(`Call ended (${timerEl.textContent || '0s'})`, 'info')
+      onCallEnded()
+    })
+
+    activeConnection.on('error', (err) => {
+      log(`Call error: ${err.message}`, 'error')
+      onCallEnded()
+    })
+  }
+
+  function endCall() {
+    if (activeConnection) {
+      activeConnection.disconnect()
+    }
+  }
+
+  function onCallEnded() {
+    activeConnection = null
+    isMuted = false
+    stopTimer()
+    setStatus('Ready', 'ready', 'var(--green)')
+    displayLabel.textContent = 'Enter number to call'
+    btnCall.classList.remove('btn-end')
+    btnCall.innerHTML = '📞'
+    btnMute.classList.remove('muted')
+    btnMute.textContent = '🎙'
+    btnMute.disabled = true
+  }
+
+  // ── Init Twilio Device ────────────────────────────────────────────────────
+  async function initDevice() {
+    try {
+      log('Fetching access token…')
+      const res = await fetch(`${API}/api/token`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const { token } = await res.json()
+      log('Token received ✓', 'success')
+
+      device = new Twilio.Device(token, {
+        codecPreferences: ['opus', 'pcmu'],
+        fakeLocalDTMF: true,
+        enableRingingState: true,
+        debug: false
+      })
+
+      device.on('ready', () => {
+        log('Device ready — you can make calls', 'success')
+        setStatus('Ready', 'ready', 'var(--green)')
+        btnCall.disabled = false
+      })
+
+      device.on('error', (err) => {
+        log(`Device error: ${err.message}`, 'error')
+        setStatus('Error', 'error', 'var(--red)')
+      })
+
+      device.on('disconnect', onCallEnded)
+
+    } catch(e) {
+      log(`Init failed: ${e.message}`, 'error')
+      log('Is the backend running at ' + API + '?', 'warn')
+      setStatus('Error', 'error', 'var(--red)')
+    }
+  }
+
+  window.addEventListener('load', initDevice)
+</script>
+
+</body>
+</html>

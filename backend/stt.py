@@ -1,8 +1,8 @@
-import openai
 import httpx
-from config import OPENAI_API_KEY
+from groq import Groq
+from config import GROQ_API_KEY
 
-openai.api_key = OPENAI_API_KEY
+client = Groq(api_key=GROQ_API_KEY)
 
 WHISPER_LANG_MAP = {
     "hi": {"bcp47": "hi-IN", "name": "Hindi"},
@@ -14,17 +14,16 @@ WHISPER_LANG_MAP = {
 
 async def transcribe_audio_url(recording_url: str, twilio_sid: str, twilio_token: str) -> dict:
     """
-    Downloads Twilio recording and transcribes with Whisper.
+    Downloads Twilio recording and transcribes with Groq Whisper.
     Auto-detects language.
     """
     auth = (twilio_sid, twilio_token)
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(recording_url + ".mp3", auth=auth, timeout=30)
+    async with httpx.AsyncClient() as http:
+        resp = await http.get(recording_url + ".mp3", auth=auth, timeout=30)
         audio_bytes = resp.content
 
-    client_oai = openai.OpenAI(api_key=OPENAI_API_KEY)
-    result = client_oai.audio.transcriptions.create(
-        model="whisper-1",
+    result = client.audio.transcriptions.create(
+        model="whisper-large-v3",
         file=("audio.mp3", audio_bytes, "audio/mpeg"),
         response_format="verbose_json",
         temperature=0,
