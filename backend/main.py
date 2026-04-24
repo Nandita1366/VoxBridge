@@ -46,6 +46,8 @@ async def startup():
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "VoxBridge", "version": "1.0.0"}
+
+
 @app.get("/api/token")
 async def get_access_token():
     token = AccessToken(
@@ -53,12 +55,9 @@ async def get_access_token():
         TWILIO_API_KEY,
         TWILIO_API_SECRET,
         identity="demo-browser-caller",
-        ttl=3600
+        ttl=3600,
     )
-    token.add_grant(VoiceGrant(
-        outgoing_application_sid=TWIML_APP_SID,
-        incoming_allow=True
-    ))
+    token.add_grant(VoiceGrant(outgoing_application_sid=TWIML_APP_SID, incoming_allow=True))
     return {"token": token.to_jwt()}
 
 
@@ -98,12 +97,17 @@ async def voice_process(call_sid: str, request: Request, db: AsyncSession = Depe
     speech_result = form.get("SpeechResult", "")
     confidence = float(form.get("Confidence", 0.5))
 
-    if not speech_result or confidence < 0.3:
-        return Response(content=build_no_input_twiml(call_sid), media_type="text/xml")
-
     session = SESSIONS.get(
-        call_sid, {"history": [], "language": "en-IN", "lang_code": "en", "neg_streak": 0, "phone": ""}
+        call_sid,
+        {"history": [], "language": "en-IN", "lang_code": "en", "neg_streak": 0, "phone": ""},
     )
+
+    # ── Low-confidence / empty input: replay in caller's language ────────────
+    if not speech_result or confidence < 0.3:
+        return Response(
+            content=build_no_input_twiml(call_sid, session.get("language", "en-IN")),
+            media_type="text/xml",
+        )
 
     bcp47 = session.get("language", "en-IN")
     stt_result = transcribe_speech_result(speech_result, bcp47)
@@ -122,10 +126,10 @@ async def voice_process(call_sid: str, request: Request, db: AsyncSession = Depe
     )
     session["history"] = nlp_result["updated_history"]
 
+    # Lock in detected language after the first turn
     if len(session["history"]) <= 2:
-        lang_code = stt_result["detected_lang_code"]
         session["language"] = stt_result["bcp47"]
-        session["lang_code"] = lang_code
+        session["lang_code"] = stt_result["detected_lang_code"]
 
     SESSIONS[call_sid] = session
 
@@ -166,7 +170,9 @@ async def voice_process(call_sid: str, request: Request, db: AsyncSession = Depe
 
     if should_escalate:
         await db.execute(
-            CallSession.__table__.update().where(CallSession.call_sid == call_sid).values(status="escalated")
+            CallSession.__table__.update()
+            .where(CallSession.call_sid == call_sid)
+            .values(status="escalated")
         )
         await db.commit()
         await ws_manager.broadcast(
@@ -215,19 +221,26 @@ async def voice_process(call_sid: str, request: Request, db: AsyncSession = Depe
         )
 
         return Response(
-            content=build_bot_reply_twiml(nlp_result["tts_text"], call_sid, session["language"], is_final=True),
+            content=build_bot_reply_twiml(
+                nlp_result["tts_text"], call_sid, session["language"], is_final=True
+            ),
             media_type="text/xml",
         )
 
     return Response(
-        content=build_bot_reply_twiml(nlp_result["tts_text"], call_sid, session["language"], is_final=False),
+        content=build_bot_reply_twiml(
+            nlp_result["tts_text"], call_sid, session["language"], is_final=False
+        ),
         media_type="text/xml",
     )
 
 
 @app.post("/voice/no-input/{call_sid}")
 async def voice_no_input(call_sid: str):
-    return Response(content=build_no_input_twiml(call_sid), media_type="text/xml")
+    # ── Look up the session language so the prompt is in the caller's language ─
+    session = SESSIONS.get(call_sid, {})
+    bcp47 = session.get("language", "en-IN")
+    return Response(content=build_no_input_twiml(call_sid, bcp47), media_type="text/xml")
 
 
 @app.get("/api/calls")
@@ -272,10 +285,16 @@ async def get_orders(db: AsyncSession = Depends(get_db)):
 @app.get("/api/stats")
 async def get_stats(db: AsyncSession = Depends(get_db)):
     total_calls = await db.scalar(select(func.count(CallSession.id)))
-    total_orders = await db.scalar(select(func.count(Order.id)).where(Order.confirmed == True))
-    escalated = await db.scalar(select(func.count(CallSession.id)).where(CallSession.status == "escalated"))
+    total_orders = await db.scalar(
+        select(func.count(Order.id)).where(Order.confirmed == True)
+    )
+    escalated = await db.scalar(
+        select(func.count(CallSession.id)).where(CallSession.status == "escalated")
+    )
     lang_result = await db.execute(
-        select(Order.language, func.count(Order.id)).where(Order.confirmed == True).group_by(Order.language)
+        select(Order.language, func.count(Order.id))
+        .where(Order.confirmed == True)
+        .group_by(Order.language)
     )
     lang_dist = {row[0]: row[1] for row in lang_result}
 
@@ -290,7 +309,9 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
 @app.get("/api/transcript/{call_sid}")
 async def get_transcript(call_sid: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
-        select(TranscriptEntry).where(TranscriptEntry.call_sid == call_sid).order_by(TranscriptEntry.created_at)
+        select(TranscriptEntry)
+        .where(TranscriptEntry.call_sid == call_sid)
+        .order_by(TranscriptEntry.created_at)
     )
     entries = result.scalars().all()
     return [
